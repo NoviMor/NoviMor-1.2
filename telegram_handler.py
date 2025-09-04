@@ -64,6 +64,20 @@ def get_conversation_handler() -> ConversationHandler:
 
             # Parameterization Sub-conversations
             States.ASK_CONTRAST_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_contrast_level)],
+            States.ASK_SATURATION_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_saturation_level)],
+            States.ASK_ABERRATION_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_aberration_level)],
+            States.ASK_PIXELATE_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_pixelate_level)],
+            States.ASK_SPEED_LEVEL: [MessageHandler(filters.Regex('^low$|^medium$|^high$'), effects.set_speed_level)],
+            States.ASK_ROTATE_OPTION: [MessageHandler(filters.Regex('^15°$|^45°$|^90°$'), effects.set_rotate_option)],
+            States.ASK_GRAIN_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_grain_level)],
+            States.ASK_KENBURNS_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_kenburns_level)],
+            States.ASK_LUT_BLEND_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_lut_blend_level)],
+            States.ASK_GLITCH_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_glitch_level)],
+            States.ASK_SHUTTER_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_shutter_level)],
+            States.ASK_NEON_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_neon_level)],
+            States.ASK_CARTOON_LEVEL: [MessageHandler(filters.Regex('^Subtle$|^Normal$|^Strong$'), effects.set_cartoon_level)],
+            States.ASK_VIGNETTE_LEVEL: [MessageHandler(filters.Regex('^Low$|^Medium$|^High$'), effects.set_vignette_level)],
+            States.ASK_FADE_DURATION: [MessageHandler(filters.Regex('^Short$|^Medium$|^Long$'), effects.set_fade_duration)],
 
             # Render Quality
             States.ASK_RENDER_QUALITY: [MessageHandler(filters.Regex('^🚀 High Quality$|^⚡️ Draft Preview$'), effects.handle_render_quality)],

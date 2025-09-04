@@ -51,6 +51,20 @@ class States(IntEnum):
 
     # Parameterization Sub-conversations
     ASK_CONTRAST_LEVEL = auto()
+    ASK_SATURATION_LEVEL = auto()
+    ASK_ABERRATION_LEVEL = auto()
+    ASK_PIXELATE_LEVEL = auto()
+    ASK_SPEED_LEVEL = auto()
+    ASK_ROTATE_OPTION = auto()
+    ASK_GRAIN_LEVEL = auto()
+    ASK_KENBURNS_LEVEL = auto()
+    ASK_LUT_BLEND_LEVEL = auto()
+    ASK_GLITCH_LEVEL = auto()
+    ASK_SHUTTER_LEVEL = auto()
+    ASK_NEON_LEVEL = auto()
+    ASK_CARTOON_LEVEL = auto()
+    ASK_VIGNETTE_LEVEL = auto()
+    ASK_FADE_DURATION = auto()
 
     # Render Quality
     ASK_RENDER_QUALITY = auto()

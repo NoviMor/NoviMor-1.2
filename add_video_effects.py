@@ -4,7 +4,7 @@ import numpy as np
 import random
 import re
 import os
-from scipy.ndimage import sobel
+from scipy.ndimage import sobel, zoom
 from scipy.interpolate import RegularGridInterpolator
 from PIL import Image, ImageFilter
 import uuid
@@ -34,33 +34,34 @@ class EffectsEngine:
 
         return np.array(lut_data).reshape((lut_size, lut_size, lut_size, 3)), lut_size
 
-    def apply_lut(self, clip, cube_file_path):
-        """Applies a 3D LUT to a video clip."""
+    def apply_lut(self, clip, cube_file_path, level: str = 'high'):
+        """Applies a 3D LUT to a video clip with a specified blend level."""
+        level_map = {'low': 0.4, 'medium': 0.7, 'high': 1.0}
+        blend = level_map.get(level, 1.0)
+
+        if blend == 0:
+            return clip
+        
         lut_table, lut_size = self.parse_cube_file(cube_file_path)
-        
-        # Create the grid points for the interpolator
         grid_points = np.linspace(0, 1, lut_size)
-        
-        # Create the interpolator
         interpolator = RegularGridInterpolator((grid_points, grid_points, grid_points), lut_table)
 
         def apply_lut_to_frame(frame):
-            # Normalize frame to 0-1 range
             original_shape = frame.shape
             normalized_frame = frame.astype(np.float32) / 255.0
-            
-            # Reshape for interpolation
             pixels = normalized_frame.reshape(-1, 3)
-            
-            # Interpolate
             new_pixels = interpolator(pixels)
-            
-            # Denormalize and reshape back
             new_frame = (np.clip(new_pixels, 0, 1) * 255).astype(np.uint8)
-            
             return new_frame.reshape(original_shape)
 
-        return clip.fl_image(apply_lut_to_frame)
+        lut_clip = clip.fl_image(apply_lut_to_frame)
+
+        if blend == 1.0:
+            return lut_clip
+        else:
+            # Composite the original clip with the LUT clip on top with opacity
+            final_clip = mp.CompositeVideoClip([clip, lut_clip.set_opacity(blend)])
+            return final_clip
     """
     A class to apply various video effects to a video clip.
     It uses a dictionary-based approach to map effect names to their methods.
@@ -81,33 +82,32 @@ class EffectsEngine:
             if os.path.exists(temp_filename):
                 os.remove(temp_filename)
 
-    def apply_ken_burns(self, clip: mp.VideoClip, zoom_factor: float = 1.2) -> mp.VideoClip:
-        """Applies a Ken Burns (zoom-in) effect."""
+    def apply_ken_burns(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
+        """Applies a Ken Burns (zoom-in) effect using numpy/scipy for performance."""
+        level_map = {'low': 1.0, 'medium': 1.25, 'high': 1.5}
+        zoom_factor = level_map.get(level, 1.25)
+
+        if zoom_factor == 1.0:
+            return clip
+
         duration = clip.duration
         w, h = clip.size
 
         def effect(get_frame, t):
             frame = get_frame(t)
             
-            # Calculate current zoom level
             current_zoom = 1.0 + (zoom_factor - 1.0) * (t / duration)
             
-            pil_img = Image.fromarray(frame)
-            
-            # Resize (zoom in)
-            zoomed_w = int(w * current_zoom)
-            zoomed_h = int(h * current_zoom)
-            zoomed_img = pil_img.resize((zoomed_w, zoomed_h), Image.LANCZOS)
+            # Zoom the frame using scipy
+            zoomed_frame = zoom(frame, (current_zoom, current_zoom, 1), order=1)
             
             # Crop the center
-            crop_x = (zoomed_w - w) // 2
-            crop_y = (zoomed_h - h) // 2
+            zh, zw, _ = zoomed_frame.shape
+            crop_x_start = (zw - w) // 2
+            crop_y_start = (zh - h) // 2
             
-            cropped_img = zoomed_img.crop((crop_x, crop_y, crop_x + w, crop_y + h))
-            
-            return np.array(cropped_img)
+            return zoomed_frame[crop_y_start:crop_y_start+h, crop_x_start:crop_x_start+w, :]
 
-        # Use fl to apply the time-dependent effect
         return clip.fl(effect, apply_to=['video'])
 
     def __init__(self):
@@ -175,51 +175,55 @@ class EffectsEngine:
         """Applies a black and white effect."""
         return clip.fx(vfx.blackwhite)
 
-    def apply_color_saturation(self, clip: mp.VideoClip) -> mp.VideoClip:
-        """Applies color saturation effect."""
-        # A factor of 2 doubles the saturation.
-        return clip.fx(vfx.colorx, 2)
+    def apply_color_saturation(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
+        """Applies color saturation effect based on a level."""
+        level_map = {'low': 1.3, 'medium': 1.7, 'high': 2.2}
+        factor = level_map.get(level, 1.7)
+        return clip.fx(vfx.colorx, factor)
 
     def apply_contrast_brightness(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
         """Adjusts contrast and brightness based on a level."""
         contrast_map = {
-            'low': -0.3,
-            'medium': 0.5,
+            'low': 0.2,
+            'medium': 0.6,
             'high': 1.0
         }
-        contrast_value = contrast_map.get(level, 0.5) # Default to medium
+        contrast_value = contrast_map.get(level, 0.6)
         return clip.fx(vfx.lum_contrast, contrast=contrast_value)
         
-    def apply_chromatic_aberration(self, clip: mp.VideoClip, shift: int = 5) -> mp.VideoClip:
-        """Applies a chromatic aberration (RGB split) effect."""
+    def apply_chromatic_aberration(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
+        """Applies a chromatic aberration (RGB split) effect based on a level."""
+        level_map = {'low': 3, 'medium': 6, 'high': 10}
+        shift = level_map.get(level, 6)
         def effect(frame):
-            # Create shifted versions of the R, G, B channels
-            r = frame[:, :, 0]
-            g = frame[:, :, 1]
-            b = frame[:, :, 2]
-            # Shift R to the left, B to the right
+            r, g, b = frame[:, :, 0], frame[:, :, 1], frame[:, :, 2]
             r_shifted = np.roll(r, -shift, axis=1)
             b_shifted = np.roll(b, shift, axis=1)
-            # Recombine the channels
             return np.stack([r_shifted, g, b_shifted], axis=-1).astype('uint8')
-        return clip.fl_image(effect)
+        return clip.fl_image(effect).set_duration(clip.duration)
 
-    def apply_pixelated(self, clip: mp.VideoClip, pixel_size: int = 10) -> mp.VideoClip:
+    def apply_pixelated(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
         """Applies a pixelated effect by resizing down and then up."""
+        level_map = {'low': 6, 'medium': 12, 'high': 20}
+        pixel_size = level_map.get(level, 12)
         return clip.fx(vfx.resize, 1/pixel_size).fx(vfx.resize, pixel_size)
 
     def apply_invert_colors(self, clip: mp.VideoClip) -> mp.VideoClip:
         """Inverts the colors of the video."""
         return clip.fx(vfx.invert_colors)
 
-    def apply_speed_control(self, clip: mp.VideoClip) -> mp.VideoClip:
-        """Changes the speed of the video (1.5x)."""
-        return clip.fx(vfx.speedx, 1.5)
+    def apply_speed_control(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
+        """Changes the speed of the video based on a level."""
+        level_map = {'low': 1.25, 'medium': 1.5, 'high': 2.0}
+        factor = level_map.get(level, 1.5)
+        return clip.fx(vfx.speedx, factor)
 
-    def apply_rotate(self, clip: mp.VideoClip) -> mp.VideoClip:
-        """Rotates the video 90 degrees clockwise."""
-        # Moviepy rotates counter-clockwise, so we use a negative angle
-        return clip.fx(vfx.rotate, -90)
+    def apply_rotate(self, clip: mp.VideoClip, level: str = 'high') -> mp.VideoClip:
+        """Rotates the video a specified number of degrees."""
+        # Moviepy rotates counter-clockwise, so we use negative for clockwise
+        level_map = {'low': -15, 'medium': -45, 'high': -90}
+        angle = level_map.get(level, -90)
+        return clip.fx(vfx.rotate, angle)
 
     def apply_vhs_look(self, clip: mp.VideoClip) -> mp.VideoClip:
         """Applies a composite VHS tape look."""
@@ -242,24 +246,23 @@ class EffectsEngine:
         # 3. Add a subtle glitch
         return self.apply_glitch(processed_clip)
 
-    def apply_film_grain(self, clip: mp.VideoClip, strength: float = 0.1) -> mp.VideoClip:
-        """Adds film grain noise to each frame."""
+    def apply_film_grain(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
+        """Adds film grain noise to each frame based on a level."""
+        level_map = {'low': 0.1, 'medium': 0.175, 'high': 0.25}
+        strength = level_map.get(level, 0.175)
         def effect(frame):
-            # Generate noise with the same shape as the frame
-            # Strength controls the intensity of the grain
             noise = np.random.randint(-25, 25, frame.shape) * strength
-            # Add noise to the frame and clip values to stay within 0-255
             return np.clip(frame + noise, 0, 255).astype('uint8')
-        return clip.fl_image(effect)
+        return clip.fl_image(effect).set_duration(clip.duration)
 
-    def apply_glitch(self, clip: mp.VideoClip) -> mp.VideoClip:
+    def apply_glitch(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
         """Applies an approximate digital glitch effect."""
+        level_map = {'low': 0.1, 'medium': 0.2, 'high': 0.3} # 10%, 20%, 30% chance
+        probability = level_map.get(level, 0.2)
         def effect(get_frame, t):
-            frame = get_frame(t).copy() # Work on a copy to avoid modifying the original
-            # 10% chance of a glitch appearing on any given frame
-            if random.random() < 0.1:
+            frame = get_frame(t).copy()
+            if random.random() < probability:
                 h, w, _ = frame.shape
-                # Glitch a random horizontal strip
                 glitch_height = h // 20
                 if glitch_height == 0: glitch_height = 1
                 
@@ -277,15 +280,14 @@ class EffectsEngine:
             return frame.astype('uint8')
         return clip.fl(effect)
 
-    def apply_rolling_shutter(self, clip: mp.VideoClip, intensity: int = 10, freq: float = 5) -> mp.VideoClip:
+    def apply_rolling_shutter(self, clip: mp.VideoClip, level: str = 'medium', freq: float = 5) -> mp.VideoClip:
         """Applies a rolling shutter wobble effect."""
+        level_map = {'low': 5, 'medium': 12, 'high': 20}
+        intensity = level_map.get(level, 12)
         def effect(get_frame, t):
             frame = get_frame(t)
             h, w, _ = frame.shape
-            # Calculate a sinusoidal shift for each row
             shift = (intensity * np.sin(2 * np.pi * (freq * t + (np.arange(h) / h)))).astype(int)
-            # Apply the shift to each row
-            # Create an array of column indices
             cols = np.arange(w)
             # Repeat for each row and add the shift
             shifted_cols = cols[np.newaxis, :] + shift[:, np.newaxis]
@@ -295,56 +297,53 @@ class EffectsEngine:
             return frame[np.arange(h)[:, np.newaxis], shifted_cols]
         return clip.fl(effect)
 
-    def apply_neon_glow(self, clip: mp.VideoClip) -> mp.VideoClip:
+    def apply_neon_glow(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
         """Applies an approximate neon edge effect."""
+        level_map = {'low': 80, 'medium': 50, 'high': 30} # Lower threshold = more glow
+        threshold = level_map.get(level, 50)
         def effect(frame):
-            # Convert to grayscale for edge detection
             gray = np.dot(frame[...,:3], [0.2989, 0.5870, 0.1140])
-            # Sobel edge detection to find edges
             sx = sobel(gray, axis=0, mode='constant')
             sy = sobel(gray, axis=1, mode='constant')
             edges = np.hypot(sx, sy)
-            # Normalize and scale the edges
             edges = (edges / np.max(edges) * 255)
-            # Create a neon color (e.g., cyan) and apply it
             neon_color = np.array([0, 255, 255])
             neon_frame = np.zeros_like(frame)
-            neon_frame[edges > 50] = neon_color # Threshold for strong edges
+            neon_frame[edges > threshold] = neon_color
             return neon_frame
-        return clip.fl_image(effect)
+        return clip.fl_image(effect).set_duration(clip.duration)
 
-    def apply_cartoon_painterly(self, clip: mp.VideoClip) -> mp.VideoClip:
+    def apply_cartoon_painterly(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
         """Applies a simplified cartoon/painterly effect using median filter and posterization."""
+        level_map = {'low': 3, 'medium': 5, 'high': 7} # Median filter size
+        filter_size = level_map.get(level, 5)
         def effect(frame):
-            # Convert frame to PIL Image
             img = Image.fromarray(frame)
-            # Apply a median filter to smooth textures and create a "smudged" look
-            img = img.filter(ImageFilter.MedianFilter(size=5))
-            # Posterize the image to reduce the color palette, enhancing the cartoon feel
-            # The number (3) indicates the number of bits to keep for each channel
+            img = img.filter(ImageFilter.MedianFilter(size=filter_size))
             img = img.quantize(colors=64).convert('RGB')
             return np.array(img)
-        return clip.fl_image(effect)
+        return clip.fl_image(effect).set_duration(clip.duration)
 
-    def apply_vignette(self, clip: mp.VideoClip, strength: float = 0.4) -> mp.VideoClip:
+    def apply_vignette(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
         """Applies a vignette (darkened edges) effect."""
+        level_map = {'low': 0.5, 'medium': 0.75, 'high': 1.0}
+        strength = level_map.get(level, 0.75)
+        
         w, h = clip.size
-        # Create a radial gradient mask
         Y, X = np.ogrid[:h, :w]
         center_y, center_x = h / 2, w / 2
         dist_from_center = np.sqrt((X - center_x)**2 + (Y - center_y)**2)
-        # Normalize the distance
         max_dist = np.sqrt(center_x**2 + center_y**2)
         radial_grad = dist_from_center / max_dist
-        # Create the vignette mask, strength controls the darkness
         vignette_mask = 1 - (radial_grad**2) * strength
         
         def effect(frame):
-            # Apply the mask to each color channel
             return (frame * vignette_mask[:, :, np.newaxis]).astype('uint8')
             
-        return clip.fl_image(effect)
+        return clip.fl_image(effect).set_duration(clip.duration)
 
-    def apply_fade_in_out(self, clip: mp.VideoClip) -> mp.VideoClip:
-        """Applies a 1-second fade-in and fade-out."""
-        return clip.fx(vfx.fadein, 1).fx(vfx.fadeout, 1)
+    def apply_fade_in_out(self, clip: mp.VideoClip, level: str = 'medium') -> mp.VideoClip:
+        """Applies a fade-in and fade-out with variable duration."""
+        level_map = {'low': 1.0, 'medium': 1.5, 'high': 2.0} # Duration in seconds
+        duration = level_map.get(level, 1.5)
+        return clip.fx(vfx.fadein, duration).fx(vfx.fadeout, duration)
